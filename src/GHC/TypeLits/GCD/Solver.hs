@@ -18,18 +18,16 @@ import OccName    (mkTcOcc)
 import Plugins    (Plugin (..), defaultPlugin)
 import TcEvidence (EvTerm)
 import TcPluginM  (TcPluginM, tcLookupTyCon)
-import TcRnTypes  (Ct, TcPlugin(..), TcPluginResult (..), ctEvidence,
-                   ctEvPred)
-import TcType      (typeKind)
+import TcRnTypes  (Ct, TcPlugin(..), TcPluginResult (..),
+                   ctEvidence, ctEvPred)
 import TyCon      (TyCon)
-import Type       (EqRel (NomEq), Kind, PredTree (EqPred),
-                   classifyPredType, eqType)
+import Type       (EqRel (NomEq), PredTree (EqPred),
+                   classifyPredType)
 #if __GLASGOW_HASKELL__ >= 711
 import TyCoRep    (Type (..), TyLit (..))
 #else
 import TypeRep    (Type (..), TyLit (..))
 #endif
-import TysWiredIn (typeNatKind)
 
 plugin :: Plugin
 plugin = defaultPlugin { tcPlugin = \_ -> Just gcdPlugin }
@@ -60,9 +58,20 @@ solveGCD gcdTc _ _ wanteds = return $! case failed of
     [] -> TcPluginOk (mapMaybe (\c -> (,c) <$> evMagic c) solved) []
     f  -> TcPluginContradiction f
   where
+    gcdWanteds :: [(Ct,(Integer,Integer))]
     gcdWanteds      = mapMaybe (toGCDEquality gcdTc) wanteds
+
+    solved, failed :: [Ct]
     (solved,failed) = (map fst *** map fst)
                     $ partition (uncurry (==) . snd) gcdWanteds
+
+toGCDEquality :: TyCon -> Ct -> Maybe (Ct,(Integer,Integer))
+toGCDEquality gcdTc ct =
+  case classifyPredType $ ctEvPred $ ctEvidence ct of
+    EqPred NomEq t1 t2
+      -> (ct,) <$> ((,) <$> reduceGCD gcdTc t1
+                        <*> reduceGCD gcdTc t2)
+    _ -> Nothing
 
 reduceGCD :: TyCon -> Type -> Maybe Integer
 reduceGCD gcdTc = go
@@ -71,17 +80,6 @@ reduceGCD gcdTc = go
     go (TyConApp tc [x,y])
       | tc == gcdTc = gcd <$> go x <*> go y
     go _ = Nothing
-
-toGCDEquality :: TyCon -> Ct -> Maybe (Ct,(Integer,Integer))
-toGCDEquality gcdTc ct =
-  case classifyPredType $ ctEvPred $ ctEvidence ct of
-    EqPred NomEq t1 t2
-      | isNatKind (typeKind t1) || isNatKind (typeKind t1)
-      -> (ct,) <$> ((,) <$> reduceGCD gcdTc t1 <*> reduceGCD gcdTc t2)
-    _ -> Nothing
-  where
-    isNatKind :: Kind -> Bool
-    isNatKind = eqType typeNatKind
 
 evMagic :: Ct -> Maybe EvTerm
 evMagic ct = case classifyPredType $ ctEvPred $ ctEvidence ct of
